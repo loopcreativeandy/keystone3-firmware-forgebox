@@ -86,9 +86,10 @@ void GetBootVersionNumber(char *version)
 #ifndef COMPILE_SIMULATOR
 bool NeedUpdateBoot(void)
 {
-    #ifndef BUILD_PRODUCTION
-        return false;
-    #endif
+    /* ForgeBox: the bootloader here is the ForgeBox one, not Keystone's 0.4.0,
+     * and must never be replaced. Without this the "Security Upgrade" screen
+     * (which rewrites the bootloader) would open on every boot. */
+    return false;
     uint32_t major, minor, build;
     if (GetBootSoftwareVersion(&major, &minor, &build) == false) {
         return true;
