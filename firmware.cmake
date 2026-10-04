@@ -3,8 +3,11 @@ set(LINKER_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/mh1903b.ld)
 set(ARCH_FLAGS "-mcpu=${MCU} -mthumb -mlittle-endian")
 set(MCU_FLAGS "${ARCH_FLAGS} -Os -mfloat-abi=hard -mfpu=fpv4-sp-d16")
 set(SECTION_FLAGS "-ffunction-sections -fdata-sections")
+# Host GCC 14 turns these C89 leftovers into errors; upstream's Docker gcc 10
+# only warns. Same behaviour as upstream, just on a newer compiler.
+set(GCC14_COMPAT_FLAGS "-Wno-error=implicit-function-declaration -Wno-error=implicit-int -Wno-error=incompatible-pointer-types -Wno-error=int-conversion")
 set(HARDENING_FLAGS "-Wformat -Werror=format-security -Werror=format")
-set(CMAKE_C_FLAGS "${MCU_FLAGS} ${SECTION_FLAGS} -Wall -Wno-unknown-pragmas -Wno-format -g ${HARDENING_FLAGS}")
+set(CMAKE_C_FLAGS "${MCU_FLAGS} ${SECTION_FLAGS} -Wall -Wno-unknown-pragmas -Wno-format -g ${HARDENING_FLAGS} ${GCC14_COMPAT_FLAGS}")
 set(CMAKE_CXX_FLAGS "${MCU_FLAGS} ${SECTION_FLAGS} -Wall -Wno-unknown-pragmas -Wno-format -g ${HARDENING_FLAGS}")
 
 if(NOT BUILD_PRODUCTION)
