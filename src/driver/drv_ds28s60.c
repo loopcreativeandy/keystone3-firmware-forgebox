@@ -345,11 +345,21 @@ static int32_t ConfirmBlockSettings(void)
     return ret;
 }
 
+/* ForgeBox: page 82 holds the fingerprint key provisioned at the factory.
+ * Overwriting it can't be undone, so both write commands refuse it here,
+ * where every DS28S60 command passes through. */
+#define FORGEBOX_PROTECTED_PAGE         82
+
 //resultArray does not contain len-byte and result-byte.
 static int32_t DS28S60_SendCmdAndGetResult(uint8_t cmd, uint8_t *para, uint8_t paraLen, uint8_t expectedLen, uint8_t *resultArray)
 {
     uint32_t tryCount = 0;
     int32_t ret = SUCCESS_CODE;
+    if ((cmd == DS28S60_CMD_WRITE_MEM || cmd == DS28S60_CMD_AUTH_WRITE) &&
+            paraLen > 0 && para[0] == FORGEBOX_PROTECTED_PAGE) {
+        printf("ds28s60: write to page %d refused (ForgeBox)\r\n", FORGEBOX_PROTECTED_PAGE);
+        return ERR_DS28S60_AUTH;
+    }
     while (tryCount++ < RETRY_MAX_COUNT) {
         ret = DS28S60_TrySendCmdAndGetResult(cmd, para, paraLen, expectedLen, resultArray);
         if (ret == DS28S60_SUCCESS) {

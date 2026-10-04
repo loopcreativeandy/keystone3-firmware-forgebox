@@ -23,8 +23,10 @@ def padding_sig_file(file_name, padding_file_name):
     with open(padding_file_name, 'wb') as dst_file:
         dst_file.write(content)
 
-    if not os.path.exists("boot.sig"):
-        return
+    if os.path.exists("boot.sig"):
+        # ForgeBox: a boot.sig here would put a bootloader update into the image.
+        raise SystemExit("boot.sig found next to the image - refusing to bundle a bootloader update (ForgeBox)")
+    return
 
     with open("boot.sig", "rb") as sig_file:
         sig_content = sig_file.read()

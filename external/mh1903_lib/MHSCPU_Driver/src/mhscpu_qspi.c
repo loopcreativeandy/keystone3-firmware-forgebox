@@ -66,6 +66,24 @@ typedef struct {
 
 static bool EncryptedFlash(void);
 
+/* ForgeBox guard: the boot area (flash offset 0x000000-0x080FFF, mapped at
+ * 0x01000000-0x01080FFF) belongs to the ForgeBox bootloader. Every erase and
+ * program path in this file refuses to touch it, whatever the caller wants. */
+#define FORGEBOX_PROTECTED_END      0x00081000UL
+#define FORGEBOX_FLASH_SIZE         0x01000000UL
+
+static bool ForgeboxFlashRangeAllowed(uint32_t adr, uint32_t sz)
+{
+    adr &= (uint32_t)0x00FFFFFF;
+    if (adr < FORGEBOX_PROTECTED_END) {
+        return false;
+    }
+    if (sz > FORGEBOX_FLASH_SIZE - adr) {
+        return false;
+    }
+    return true;
+}
+
 
 static void delay_40ms(void)
 {
@@ -219,6 +237,10 @@ static uint8_t QSPI_ProgramPage_Ex(QSPI_CommandTypeDef *cmdParam, uint32_t adr, 
     uint32_t i, j;
     uint32_t end_addr, current_size, current_addr, current_dat, loop_addr;
     MH_CommandTypeDef sCommand = {0};
+
+    if (!ForgeboxFlashRangeAllowed(adr, sz)) {
+        return QSPI_STATUS_ERROR;
+    }
 
     adr &= (uint32_t)0x00FFFFFF;
     assert_param(IS_QSPI_ADDR(adr));
@@ -548,6 +570,15 @@ uint8_t QSPI_EraseSector(QSPI_CommandTypeDef *cmdParam, uint32_t SectorAddress)
     MH_CommandTypeDef sCommand = {0};
     SectorAddress &= (uint32_t)(0x00FFFFFF);
 
+    /* A block erase (32/64 KB) could reach back into the boot area, so only
+     * the plain 4 KB sector erase is allowed, and only above it. */
+    if (cmdParam != NULL && cmdParam->Instruction != SECTOR_ERASE_CMD) {
+        return QSPI_STATUS_ERROR;
+    }
+    if (!ForgeboxFlashRangeAllowed(SectorAddress, 4096)) {
+        return QSPI_STATUS_ERROR;
+    }
+
     assert_param(IS_QSPI_ADDR(SectorAddress));
     while (CACHE->CACHE_AES_CS & CACHE_IS_BUSY);
 
@@ -579,6 +610,11 @@ uint8_t QSPI_EraseSector(QSPI_CommandTypeDef *cmdParam, uint32_t SectorAddress)
 uint8_t QSPI_EraseChip(QSPI_CommandTypeDef *cmdParam)
 {
     MH_CommandTypeDef sCommand = {0};
+
+    /* ForgeBox guard: a chip erase would wipe the bootloader. Never. */
+    (void)cmdParam;
+    (void)sCommand;
+    return QSPI_STATUS_ERROR;
     while (CACHE->CACHE_AES_CS & CACHE_IS_BUSY);
 
     if (cmdParam == NULL) {
@@ -612,6 +648,10 @@ uint8_t QSPI_ProgramPage(QSPI_CommandTypeDef *cmdParam, DMA_TypeDef *DMA_Channel
     uint32_t end_addr, current_size, current_addr = 0, loop_addr;
     DMA_InitTypeDef DMA_InitStruct;
     MH_CommandTypeDef sCommand = {0};
+
+    if (!ForgeboxFlashRangeAllowed(adr, sz)) {
+        return QSPI_STATUS_ERROR;
+    }
 
     while (CACHE->CACHE_AES_CS & CACHE_IS_BUSY);
 
@@ -730,6 +770,10 @@ uint8_t  QSPI_ProgramPage_ByAES(QSPI_CommandTypeDef *cmdParam,  DMA_TypeDef *DMA
     DMA_InitTypeDef DMA_InitStruct;
     uint8_t mplain[32];
     MH_CommandTypeDef sCommand;
+
+    if (!ForgeboxFlashRangeAllowed(adr, sz)) {
+        return QSPI_STATUS_ERROR;
+    }
 
     while (CACHE->CACHE_AES_CS & CACHE_IS_BUSY);
 
@@ -918,6 +962,10 @@ uint8_t FLASH_EraseSector(uint32_t sectorAddress)
 {
     uint8_t ret;
 
+    if (!ForgeboxFlashRangeAllowed(sectorAddress, 4096)) {
+        return QSPI_STATUS_ERROR;
+    }
+
     // __disable_irq();
     // __disable_fault_irq();
 
@@ -941,6 +989,10 @@ uint8_t FLASH_EraseSector(uint32_t sectorAddress)
 uint8_t FLASH_ProgramPage(QSPI_CommandTypeDef *cmdParam, DMA_TypeDef *DMA_Channelx, uint32_t addr, uint32_t size, uint8_t *buffer)
 {
     uint8_t ret;
+
+    if (!ForgeboxFlashRangeAllowed(addr, size)) {
+        return QSPI_STATUS_ERROR;
+    }
 
     __disable_irq();
     __disable_fault_irq();

@@ -11,130 +11,13 @@
 
 LV_FONT_DECLARE(openSans_24);
 
-#define BOOT_ADDR                           (0x01001000)
-#define SECTOR_SIZE                         4096
-#define BOOT_HEAD_SIZE                      0x104
-#define APP_ADDR                            (0x1001000 + 0x80000)   //108 1000
-#define APP_CHECK_START_ADDR                (APP_ADDR)
-#define APP_END_ADDR                        (0x2000000)
-static const uint8_t MAGIC_NUMBER[] = {'m', 'h', '1', '9', '0', '3', 'b', 'o', 'o', 't', 'u', 'p', 'd', 'a', 't', 'e'};
-
-static uint8_t g_fileUnit[SECTOR_SIZE] = {0};
-
-static uint32_t BinarySearchBootHead(void)
-{
-    size_t MAGIC_NUMBER_SIZE = sizeof(MAGIC_NUMBER);
-    uint8_t *buffer = SRAM_MALLOC(SECTOR_SIZE);
-    uint32_t startIndex = (APP_CHECK_START_ADDR - APP_ADDR) / SECTOR_SIZE;
-    uint32_t endIndex = (APP_END_ADDR - APP_ADDR) / SECTOR_SIZE;
-
-    for (int i = startIndex + 1; i < endIndex; i++) {
-        memcpy_s(buffer, SECTOR_SIZE, (uint32_t *)(APP_ADDR + i * SECTOR_SIZE), SECTOR_SIZE);
-        WDT_ReloadCounter();
-        if (memcmp(buffer, MAGIC_NUMBER, MAGIC_NUMBER_SIZE) == 0) {
-            printf("find magic number\n");
-            SRAM_FREE(buffer);
-            return i;
-        }
-    }
-    SRAM_FREE(buffer);
-    return -1;
-}
-
-static void Delay(uint32_t ms)
-{
-    uint32_t i, tick, countPerMs;
-    countPerMs = SYSCTRL->HCLK_1MS_VAL / 4;
-    for (tick = 0; tick < ms; tick++) {
-        for (i = 0; i < countPerMs; i++) {
-            if (i > 10000000) {
-                printf("!!\r\n");
-            }
-        }
-    }
-}
-
+/* ForgeBox: the boot area belongs to the ForgeBox bootloader and must never
+ * be rewritten from the app. The original updater (search the image for
+ * MAGIC_NUMBER, then write it over 0x01000000) is removed; this always fails
+ * without touching flash. The flash driver refuses boot-area writes as well. */
 int32_t UpdateBootFromFlash(void)
 {
-    osKernelLock();
-    WDT_ReloadCounter();
-    int num = BinarySearchBootHead();
-    printf("num = %d\n", num);
-    if (num <= 0) {
-        osKernelUnlock();
-        return -1;
-    }
-    uint32_t len, offset, crcCalc, readCrc, writeAddr = 0x1001000;
-    uint32_t baseAddr = APP_ADDR + num * SECTOR_SIZE;
-    int startNum = num + 1;
-    uint8_t hash[32] = {0};
-    uint8_t calHash[32] = {0};
-    size_t MAGIC_NUMBER_SIZE = sizeof(MAGIC_NUMBER);
-
-    struct sha256_ctx ctx;
-    sha256_init(&ctx);
-    QspiFlashInit();
-
-    memset(g_fileUnit, 0xFF, sizeof(g_fileUnit));
-
-    memcpy(g_fileUnit, (uint32_t *)baseAddr, 4 + 32 + MAGIC_NUMBER_SIZE);
-    uint32_t bootLen = (g_fileUnit[MAGIC_NUMBER_SIZE + 0] << 24) + (g_fileUnit[MAGIC_NUMBER_SIZE + 1] << 16) + (g_fileUnit[MAGIC_NUMBER_SIZE + 2] << 8) + g_fileUnit[MAGIC_NUMBER_SIZE + 3];
-    printf("bootLen = %d\n", (int)bootLen);
-    memcpy(hash, &g_fileUnit[MAGIC_NUMBER_SIZE + 4], 32);
-
-    // Validate the staged length before it drives any loop bound or copy size.
-    // bootLen must cover the 0x134 header and fit within the boot partition
-    if (bootLen < 0x134 || bootLen > (uint32_t)(APP_ADDR - BOOT_ADDR) ||
-            (bootLen - 0x134) % SECTOR_SIZE < 4) {
-        printf("invalid bootLen = %u\n", (unsigned int)bootLen);
-        osKernelUnlock();
-        return -1;
-    }
-
-    memset(g_fileUnit, 0xFF, sizeof(g_fileUnit));
-    memcpy(g_fileUnit, (uint32_t *)(baseAddr + 4 + 32 + 0x30 + MAGIC_NUMBER_SIZE), BOOT_HEAD_SIZE);
-    QspiFlashEraseAndWrite(0x01000000, g_fileUnit, SECTOR_SIZE);
-    WDT_ReloadCounter();
-
-    sha256_update(&ctx, (uint32_t *)(baseAddr + 4 + 32 + MAGIC_NUMBER_SIZE), 0x134);
-    crcCalc = crc32_ieee(0, (uint32_t *)(baseAddr + 4 + 32 + MAGIC_NUMBER_SIZE), 0x134);
-
-    for (int i = startNum; i <= startNum + (bootLen - 0x134) / SECTOR_SIZE; i++, writeAddr += SECTOR_SIZE) {
-        Delay(100);
-        memset(g_fileUnit, 0xFF, sizeof(g_fileUnit));
-        if (i == startNum + (bootLen - 0x134) / SECTOR_SIZE) {
-            len = (bootLen - 0x134) % SECTOR_SIZE - 4;
-            sha256_update(&ctx, (uint32_t *)(APP_ADDR + i * SECTOR_SIZE), len + 4);
-            memcpy(&readCrc, (uint32_t *)(APP_ADDR + i * SECTOR_SIZE + len), 4);
-        } else {
-            len = SECTOR_SIZE;
-            sha256_update(&ctx, (uint32_t *)(APP_ADDR + i * SECTOR_SIZE), len);
-        }
-        if (len > SECTOR_SIZE) {   // defensive: never copy past the 4 KB g_fileUnit buffer
-            osKernelUnlock();
-            return -1;
-        }
-        memcpy(g_fileUnit, (uint32_t *)(APP_ADDR + i * SECTOR_SIZE), len);
-        crcCalc = crc32_ieee(crcCalc, (uint32_t *)(APP_ADDR + i * SECTOR_SIZE), len);
-        printf("writeAddr = %#x\n", (unsigned int)writeAddr);
-        QspiFlashEraseAndWrite(writeAddr, g_fileUnit, SECTOR_SIZE);
-        WDT_ReloadCounter();
-    }
-
-    sha256_done(&ctx, (struct sha256 *)calHash);
-
-    osKernelUnlock();
-    PrintArray("hash", hash, 32);
-    PrintArray("calHash", calHash, 32);
-    printf("crcCalc = %#x\n", (unsigned int)crcCalc);
-    printf("readCrc = %#x\n", (unsigned int)readCrc);
-    if (memcmp(hash, calHash, 32) == 0) {
-        printf("update success\n");
-        memset(g_fileUnit, 0, sizeof(g_fileUnit));
-        return 0;
-    } else {
-        printf("update failed\n");
-        return -1;
-    }
+    printf("boot update disabled on ForgeBox\n");
+    return -1;
 }
 #endif
